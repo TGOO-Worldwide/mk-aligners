@@ -1,0 +1,86 @@
+# Cloud Build: build da imagem, push para Artifact Registry e deploy no Cloud Run.
+#
+# Criar trigger com substituições (ajustar ao ambiente):
+#   _REGION              europe-west1
+#   _AR_REPOSITORY       maquinadevendas-docker
+#   _IMAGE_NAME          maquinadevendas
+#   _SERVICE_NAME        maquinadevendas
+#   _CLOUD_SQL_INSTANCE  PROJECT_ID:REGION:SQL_INSTANCE
+#   _RUN_SERVICE_ACCOUNT maquinadevendas-run@PROJECT_ID.iam.gserviceaccount.com
+
+substitutions:
+  _REGION: europe-west1
+  _AR_REPOSITORY: maquinadevendas-docker
+  _IMAGE_NAME: maquinadevendas
+  _SERVICE_NAME: maquinadevendas
+  _CLOUD_SQL_INSTANCE: PROJECT_ID:europe-west1:maquinadevendas-db
+  _RUN_SERVICE_ACCOUNT: maquinadevendas-run@PROJECT_ID.iam.gserviceaccount.com
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+images:
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPOSITORY}/${_IMAGE_NAME}:${SHORT_SHA}"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPOSITORY}/${_IMAGE_NAME}:latest"
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPOSITORY}/${_IMAGE_NAME}:${SHORT_SHA}
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPOSITORY}/${_IMAGE_NAME}:latest
+      - .
+
+  - id: push-sha
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPOSITORY}/${_IMAGE_NAME}:${SHORT_SHA}
+    waitFor: ["build"]
+
+  - id: push-latest
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPOSITORY}/${_IMAGE_NAME}:latest
+    waitFor: ["build"]
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE_NAME}
+      - --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPOSITORY}/${_IMAGE_NAME}:${SHORT_SHA}
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --port=8080
+      - --memory=512Mi
+      - --cpu=1
+      - --timeout=300
+      - --min-instances=0
+      - --max-instances=10
+      - --service-account=${_RUN_SERVICE_ACCOUNT}
+      - --add-cloudsql-instances=${_CLOUD_SQL_INSTANCE}
+      - --set-env-vars=NODE_ENV=production,GOOGLE_CLOUD_PROJECT=${PROJECT_ID},GOOGLE_CLOUD_LOCATION=${_REGION}
+      - --set-secrets=DATABASE_URL=database-url:latest,SHADOW_DATABASE_URL=shadow-database-url:latest,NEXTAUTH_SECRET=nextauth-secret:latest,NEXTAUTH_URL=nextauth-url:latest,RESEND_API_KEY=resend-api-key:latest,RESEND_FROM_EMAIL=resend-from-email:latest,QUOTE_TO_EMAIL=quote-to-email:latest,STRIPE_SECRET_KEY=stripe-secret-key:latest,STRIPE_WEBHOOK_SECRET=stripe-webhook-secret:latest
+    waitFor: ["push-sha"]
+
+  - id: route-traffic
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - services
+      - update-traffic
+      - ${_SERVICE_NAME}
+      - --region=${_REGION}
+      - --to-latest
+    waitFor: ["deploy"]

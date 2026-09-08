@@ -1,0 +1,134 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum UserRole {
+  admin
+  tgoo
+  clinic
+}
+
+enum QuoteRequestStatus {
+  pending
+  sent
+  closed
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  failed
+  refunded
+}
+
+enum AiGenerationType {
+  rfq_draft
+}
+
+enum AiGenerationStatus {
+  pending
+  completed
+  error
+}
+
+model User {
+  id          Int      @id @default(autoincrement())
+  email       String   @unique
+  name        String?
+  role        UserRole @default(clinic)
+  isActive    Boolean  @default(true)
+  lastLoginAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  quoteRequests QuoteRequest[]
+  payments      Payment[]
+  aiGenerations AiGeneration[]
+
+  @@map("users")
+}
+
+model OtpCode {
+  id        Int       @id @default(autoincrement())
+  email     String
+  codeHash  String
+  expiresAt DateTime
+  usedAt    DateTime?
+  attempts  Int       @default(0)
+  ipAddress String?
+  createdAt DateTime  @default(now())
+
+  @@index([email])
+  @@map("otp_codes")
+}
+
+model QuoteRequest {
+  id             Int                 @id @default(autoincrement())
+  name           String
+  email          String
+  phone          String?
+  organization   String?
+  manufacturers  Json
+  message        String?             @db.Text
+  includePilot   Boolean             @default(true)
+  aiDraft        String?             @db.Text
+  status         QuoteRequestStatus  @default(pending)
+  userId         Int?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  user          User?           @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  aiGenerations AiGeneration[]
+
+  @@index([email])
+  @@index([status])
+  @@index([userId])
+  @@map("quote_requests")
+}
+
+model Payment {
+  id                      Int           @id @default(autoincrement())
+  userId                  Int?
+  stripeCheckoutSessionId String        @unique
+  stripePaymentIntentId   String?
+  amountCents             Int
+  currency                String        @default("eur")
+  status                  PaymentStatus @default(pending)
+  description             String?
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("payments")
+}
+
+model AiGeneration {
+  id           Int                @id @default(autoincrement())
+  type         AiGenerationType
+  status       AiGenerationStatus @default(pending)
+  prompt       String             @db.Text
+  response     String?            @db.Text
+  model        String             @default("gemini-2.5-flash")
+  tokensInput  Int?
+  tokensOutput Int?
+  errorMessage String?            @db.Text
+  userId       Int?
+  quoteRequestId Int?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  quoteRequest QuoteRequest? @relation(fields: [quoteRequestId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([userId])
+  @@index([quoteRequestId])
+  @@index([type, status])
+  @@map("ai_generations")
+}
