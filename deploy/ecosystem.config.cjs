@@ -16,6 +16,8 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         NEXT_TELEMETRY_DISABLED: "1",
+        PORT: "3003",
+        HOSTNAME: "127.0.0.1",
       },
     },
   ],

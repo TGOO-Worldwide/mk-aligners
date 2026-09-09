@@ -6,7 +6,7 @@
 #   SSH_PRIVATE_KEY — chave privada OpenSSH completa
 #   SSH_PORT        — opcional (padrão 22)
 #   DEPLOY_PATH     — caminho absoluto, ex.: /home/usuario/htdocs/app.dominio.com
-#   PM2_APP_NAME    — opcional (padrão: maquinadevendas)
+#   PM2_APP_NAME    — opcional (padrão: mkaligners)
 
 name: Deploy CloudPanel
 
@@ -108,5 +108,6 @@ jobs:
           PM2_APP_NAME: ${{ secrets.PM2_APP_NAME }}
         run: |
           set -euo pipefail
-          APP_NAME="${PM2_APP_NAME:-maquinadevendas}"
-          ssh cloudpanel "bash '$DEPLOY_PATH/deploy/remote-restart.sh' '$DEPLOY_PATH' '$APP_NAME'"
+          APP_NAME="${PM2_APP_NAME:-mkaligners}"
+          # bash -lc: carrega profile/nvm do usuário CloudPanel (SSH não-interativo não faz isso)
+          ssh cloudpanel "bash -lc $(printf '%q' "bash '$DEPLOY_PATH/deploy/remote-restart.sh' '$DEPLOY_PATH' '$APP_NAME'")"

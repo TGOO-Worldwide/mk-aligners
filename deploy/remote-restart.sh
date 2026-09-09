@@ -5,6 +5,42 @@ set -euo pipefail
 DEPLOY_PATH="${1:?Informe o caminho do deploy}"
 APP_NAME="${2:-mkaligners}"
 
+# Sessões SSH não-interativas não carregam nvm/bashrc — CloudPanel usa nvm.
+load_node_env() {
+  export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+
+  if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+    # shellcheck disable=SC1090
+    . "$NVM_DIR/nvm.sh"
+    # Preferência da versão do projeto / padrão do nvm
+    nvm use default >/dev/null 2>&1 || nvm use node >/dev/null 2>&1 || true
+  fi
+
+  # Fallbacks comuns em VPS / CloudPanel
+  for candidate in \
+    "$HOME/.local/bin" \
+    /usr/local/bin \
+    /home/clp/nvm/versions/node/*/bin
+  do
+    if [[ -d $candidate ]]; then
+      # shellcheck disable=SC2086
+      PATH="$candidate:$PATH"
+    fi
+  done
+  export PATH
+
+  # Último recurso: binário mais recente do nvm no disco
+  if ! command -v npm >/dev/null 2>&1 && [[ -d "$NVM_DIR/versions/node" ]]; then
+    local latest
+    latest="$(ls -1d "$NVM_DIR/versions/node"/v* 2>/dev/null | sort -V | tail -1 || true)"
+    if [[ -n "${latest:-}" && -x "$latest/bin/npm" ]]; then
+      export PATH="$latest/bin:$PATH"
+    fi
+  fi
+}
+
+load_node_env
+
 cd "$DEPLOY_PATH"
 chmod +x deploy/remote-restart.sh 2>/dev/null || true
 
@@ -19,6 +55,15 @@ if [[ ! -d .next ]]; then
   exit 1
 fi
 
+if ! command -v npm >/dev/null 2>&1; then
+  echo "ERRO: npm não encontrado no PATH do usuário SSH."
+  echo "Usuário: $(whoami)  HOME: $HOME  PATH: $PATH"
+  echo "No CloudPanel, instale Node.js no site (nvm) e confirme com: ssh ... 'bash -lc \"which npm\"'"
+  exit 127
+fi
+
+echo "→ node $(node -v) | npm $(npm -v) ($(command -v npm))"
+
 # Carrega variáveis do .env para o processo PM2 (--update-env)
 set -a
 # shellcheck disable=SC1091
@@ -27,6 +72,9 @@ set +a
 
 export NODE_ENV=production
 export NEXT_TELEMETRY_DISABLED=1
+# Porta fixa do site no CloudPanel
+export PORT=3003
+export HOSTNAME="${HOSTNAME:-127.0.0.1}"
 
 # prisma CLI está em devDependencies — instala tudo, gera client, depois remove dev
 echo "→ npm ci"
