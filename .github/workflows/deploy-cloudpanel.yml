@@ -1,0 +1,112 @@
+# Deploy automático para CloudPanel via SSH + rsync (sem git no servidor).
+#
+# Secrets (Settings → Secrets and variables → Actions):
+#   SSH_HOST        — IP ou hostname
+#   SSH_USER        — usuário SSH do site no CloudPanel
+#   SSH_PRIVATE_KEY — chave privada OpenSSH completa
+#   SSH_PORT        — opcional (padrão 22)
+#   DEPLOY_PATH     — caminho absoluto, ex.: /home/usuario/htdocs/app.dominio.com
+#   PM2_APP_NAME    — opcional (padrão: maquinadevendas)
+
+name: Deploy CloudPanel
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cloudpanel
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          DATABASE_URL: mysql://build:build@127.0.0.1:3306/build
+          SHADOW_DATABASE_URL: mysql://build:build@127.0.0.1:3306/build_shadow
+
+      - name: Build
+        run: npm run build
+        env:
+          DATABASE_URL: mysql://build:build@127.0.0.1:3306/build
+          SHADOW_DATABASE_URL: mysql://build:build@127.0.0.1:3306/build_shadow
+          NEXT_TELEMETRY_DISABLED: "1"
+
+      - name: Prepare SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_PRIVATE_KEY:-}" || { echo "Secret SSH_PRIVATE_KEY ausente"; exit 1; }
+          test -n "${SSH_HOST:-}" || { echo "Secret SSH_HOST ausente"; exit 1; }
+          test -n "${SSH_USER:-}" || { echo "Secret SSH_USER ausente"; exit 1; }
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          PORT="${SSH_PORT:-22}"
+          ssh-keyscan -p "$PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          {
+            echo "Host cloudpanel"
+            echo "  HostName $SSH_HOST"
+            echo "  User $SSH_USER"
+            echo "  Port $PORT"
+            echo "  IdentityFile ~/.ssh/deploy_key"
+            echo "  IdentitiesOnly yes"
+            echo "  StrictHostKeyChecking yes"
+          } > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+      - name: Sync files via rsync (sem git no servidor)
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          test -n "${DEPLOY_PATH:-}" || { echo "Secret DEPLOY_PATH ausente"; exit 1; }
+
+          ssh cloudpanel "mkdir -p '$DEPLOY_PATH/deploy'"
+
+          rsync -az --delete \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude '.env' \
+            --exclude '.env.local' \
+            --exclude '.env.development' \
+            --exclude '.env.production' \
+            --exclude '.env.*.local' \
+            --exclude 'node_modules/' \
+            --exclude 'cloudbuild.yaml' \
+            --exclude 'Dockerfile' \
+            --exclude '.dockerignore' \
+            --exclude 'AGENTS.md' \
+            --exclude 'CLAUDE.md' \
+            ./ cloudpanel:"$DEPLOY_PATH/"
+
+      - name: Install deps + restart (sem git)
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          PM2_APP_NAME: ${{ secrets.PM2_APP_NAME }}
+        run: |
+          set -euo pipefail
+          APP_NAME="${PM2_APP_NAME:-maquinadevendas}"
+          ssh cloudpanel "bash '$DEPLOY_PATH/deploy/remote-restart.sh' '$DEPLOY_PATH' '$APP_NAME'"
